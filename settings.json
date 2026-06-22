@@ -8,7 +8,7 @@
   "server": {
     "ip": "BMK12345.aternos.me",
     "port": 43856,
-    "version": "1.21.11"
+    "version": "1.21.9"
   },
   "position": {
     "enabled": true,

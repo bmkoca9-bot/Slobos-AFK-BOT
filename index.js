@@ -21,7 +21,6 @@ let botState = {
 };
 
 // Health check endpoint for monitoring
-// Health check endpoint for monitoring
 app.get('/', (req, res) => {
   // "Blue Teal Shadow" Theme - Live Dashboard
   res.send(`
@@ -333,14 +332,9 @@ function addInterval(callback, delay) {
 }
 
 function getReconnectDelay() {
-  // Aggressive reconnection: fast, flat delay or very subtle backoff
   const baseDelay = config.utils['auto-reconnect-delay'] || 2000;
   const maxDelay = config.utils['max-reconnect-delay'] || 15000;
-
-  // Use a much gentler backoff or just a flat delay if user wants "lower"
-  // Current logic: attempts * 1000 + base, capped at max
   const delay = Math.min(baseDelay + (botState.reconnectAttempts * 1000), maxDelay);
-
   return delay;
 }
 
@@ -375,6 +369,15 @@ function createBot() {
       version: config.server.version,
       hideErrors: false,
       checkTimeoutInterval: 120000 // 2 minutes - detects dead connections without false-positive disconnects
+    });
+
+    // Fabric / Modded Server Fix: Ignore 'update_recipes' and 'tags' packets
+    bot.on('inject_allowed', () => {
+        bot._client.on('packet', (data, metadata) => {
+            if (metadata.name === 'update_recipes' || metadata.name === 'tags') {
+                return;
+            }
+        });
     });
 
     bot.loadPlugin(pathfinder);
@@ -432,18 +435,13 @@ function createBot() {
           message.includes('Set own game mode to Creative Mode')
         ) {
           console.log('[INFO] Bot is now in Creative Mode.');
-           
           bot.chat('/gamerule sendCommandFeedback false');
-          
         }
       });
     });
 
-    
-
     // Handle disconnection
     bot.on('end', (reason) => {
-      const wasSpawned = botState.connected;
       console.log(`[Bot] Disconnected: ${reason || 'Unknown reason'}`);
       botState.connected = false;
       clearAllIntervals();
@@ -458,7 +456,6 @@ function createBot() {
     });
 
     bot.on('kicked', (reason) => {
-      const wasSpawned = botState.connected;
       console.log(`[Bot] Kicked: ${reason}`);
       botState.connected = false;
       botState.errors.push({ type: 'kicked', reason, time: Date.now() });
@@ -476,7 +473,6 @@ function createBot() {
     bot.on('error', (err) => {
       console.log(`[Bot] Error: ${err.message}`);
       botState.errors.push({ type: 'error', message: err.message, time: Date.now() });
-      // Don't immediately reconnect on error - let 'end' event handle it
     });
 
   } catch (err) {
@@ -557,7 +553,7 @@ function initializeModules(bot, mcData, defaultMove) {
         }, 100);
         botState.lastActivity = Date.now();
       }
-    }, 3000); // Jump every 30 seconds
+    }, 3000); // Jump every 3 seconds
 
     if (config.utils['anti-afk'].sneak) {
       bot.setControlState('sneak', true);
@@ -592,9 +588,7 @@ function initializeModules(bot, mcData, defaultMove) {
 // Periodic Rejoin Module
 const setupLeaveRejoin = require('./leaveRejoin');
 
-// Periodic Rejoin Module - Handled by leaveRejoin.js now
 function periodicRejoin(bot) {
-  // Deprecated in favor of leaveRejoin.js
   console.log('[Rejoin] Using new leaveRejoin system.');
 }
 
@@ -609,7 +603,6 @@ function startCircleWalk(bot, defaultMove) {
   addInterval(() => {
     if (!bot || !botState.connected) return;
 
-    // Rate limit pathfinding
     const now = Date.now();
     if (now - lastPathTime < 2000) return;
     lastPathTime = now;
@@ -659,8 +652,6 @@ function startLookAround(bot) {
 // ============================================================
 // CUSTOM MODULES
 // ============================================================
-
-// Avoid mobs/players
 function avoidMobs(bot) {
   const safeDistance = 5;
   addInterval(() => {
@@ -686,7 +677,6 @@ function avoidMobs(bot) {
   }, 2000);
 }
 
-// Combat module
 function combatModule(bot, mcData) {
   addInterval(() => {
     if (!bot || !botState.connected) return;
@@ -725,7 +715,6 @@ function combatModule(bot, mcData) {
   });
 }
 
-// Bed module (FIXED - beds are blocks, not entities)
 function bedModule(bot, mcData) {
   addInterval(async () => {
     if (!bot || !botState.connected) return;
@@ -734,7 +723,6 @@ function bedModule(bot, mcData) {
       const isNight = bot.time.timeOfDay >= 12500 && bot.time.timeOfDay <= 23500;
 
       if (config.beds['place-night'] && isNight && !bot.isSleeping) {
-        // Find nearby bed blocks
         const bedBlock = bot.findBlock({
           matching: block => block.name.includes('bed'),
           maxDistance: 8
@@ -745,7 +733,7 @@ function bedModule(bot, mcData) {
             await bot.sleep(bedBlock);
             console.log('[Bed] Sleeping...');
           } catch (e) {
-            // Can't sleep - maybe not night enough or monsters nearby
+            // Can't sleep yet
           }
         }
       }
@@ -755,7 +743,6 @@ function bedModule(bot, mcData) {
   }, 10000);
 }
 
-// Chat module
 function chatModule(bot) {
   bot.on('chat', (username, message) => {
     if (!bot || username === bot.username) return;
@@ -838,9 +825,7 @@ function sendDiscordWebhook(content, color = 0x0099ff) {
     }
   };
 
-  const req = protocol.request(options, (res) => {
-    // console.log(`[Discord] Sent webhook: ${res.statusCode}`);
-  });
+  const req = protocol.request(options, (res) => {});
 
   req.on('error', (e) => {
     console.log(`[Discord] Error sending webhook: ${e.message}`);
@@ -855,15 +840,10 @@ function sendDiscordWebhook(content, color = 0x0099ff) {
 // ============================================================
 process.on('uncaughtException', (err) => {
   console.log(`[FATAL] Uncaught Exception: ${err.message}`);
-  // console.log(err.stack); // Optional: keep logs cleaner
   botState.errors.push({ type: 'uncaught', message: err.message, time: Date.now() });
 
-  // CRITICAL: DO NOT EXIT.
-  // The user wants the server to stay up "all the time no matter what".
-  // We just clear intervals and try to restart the bot logic.
   if (config.utils['auto-reconnect']) {
     clearAllIntervals();
-    // Wrap in a tiny timeout to prevent tight loops if the error is synchronous
     setTimeout(() => {
       scheduleReconnect();
     }, 1000);
@@ -873,20 +853,14 @@ process.on('uncaughtException', (err) => {
 process.on('unhandledRejection', (reason, promise) => {
   console.log(`[FATAL] Unhandled Rejection: ${reason}`);
   botState.errors.push({ type: 'rejection', message: String(reason), time: Date.now() });
-  // Do not exit.
 });
 
-// Graceful shutdown from external signals (still allowed to exit if system demands it)
 process.on('SIGTERM', () => {
-  console.log('[System] SIGTERM received. Ignoring to stay alive? (Render might force kill)');
-  // If we mistakenly exit here, the web server dies. 
-  // User asked for "all the time on no matter what".
-  // Note: Render will SIGKILL if we don't exit, but this keeps us up as long as possible.
+  console.log('[System] SIGTERM received. Handling shutdown...');
   process.exit(0);
 });
 
 process.on('SIGINT', () => {
-  // Local Ctrl+C
   console.log('[System] Manual stop requested. Exiting...');
   process.exit(0);
 });
@@ -895,7 +869,7 @@ process.on('SIGINT', () => {
 // START THE BOT
 // ============================================================
 console.log('='.repeat(50));
-console.log('  Minecraft AFK Bot v2.3 - Bug Fix Edition');
+console.log('  Minecraft AFK Bot v2.3 - Bug Fix Edition (Fabric Ready)');
 console.log('='.repeat(50));
 console.log(`Server: ${config.server.ip}:${config.server.port}`);
 console.log(`Version: ${config.server.version}`);
